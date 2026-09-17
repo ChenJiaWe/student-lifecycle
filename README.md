@@ -34,25 +34,66 @@
 
 ## 本地运行
 
+**前置要求**：Node ≥ 20、pnpm 9、一个 Neon Postgres 项目（免费档即可）。
+
+### 1. 安装依赖
+
 ```bash
 pnpm i
-
-cp .env.example .env
-# 填入 Neon 的两个连接串：
-#   DATABASE_URL          — 带 -pooler 的，给 NestJS 运行时
-#   DATABASE_URL_UNPOOLED — 不带 -pooler 的，给 Prisma migrate 与 seed
-# JWT_SECRET 可用 openssl rand -base64 32 生成
-# LLM_API_KEY 留空也能跑，简报功能自动降级（显示原始反馈时间线）
-
-pnpm db:migrate   # 应用数据库 migration
-pnpm db:seed      # 填充演示数据（约 70–90 秒，需直连，会重置所有数据）
-
-# 两个终端窗口分别跑：
-pnpm --filter api dev    # :3000  NestJS API
-pnpm --filter web dev    # :5173  Vite dev server（/api 代理到 :3000）
 ```
 
-Vite dev server 把 `/api/*` 代理到 `:3000`，与生产环境同域，httpOnly cookie 在两种环境下都是 first-party。
+### 2. 配置环境变量
+
+```bash
+cp .env.example .env
+```
+
+打开 `.env`，填入以下内容：
+
+| 变量 | 来源 | 说明 |
+|---|---|---|
+| `DATABASE_URL` | Neon Dashboard → Connection string | 选带 `-pooler` 的连接串，NestJS 运行时使用 |
+| `DATABASE_URL_UNPOOLED` | Neon Dashboard → Connection string | 不带 `-pooler` 的直连串，Prisma migrate 使用 |
+| `SHADOW_DATABASE_URL` | 手动建库后填入 | `prisma migrate dev` 需要 shadow database（见下方说明） |
+| `JWT_SECRET` | `openssl rand -base64 32` | 任意随机字符串 |
+| `QIANWEN_API_KEY` | 可选 | 留空时续费简报功能自动降级，其余功能不受影响 |
+
+**Shadow database 说明**：Prisma `migrate dev` 需要一个独立的 shadow 库用于迁移对比。在 Neon 里手动建一个库：
+
+```bash
+psql "$DATABASE_URL_UNPOOLED" -c 'CREATE DATABASE shadow_db;'
+```
+
+然后把直连串里的 `/neondb` 改成 `/shadow_db`，填入 `SHADOW_DATABASE_URL`。
+
+### 3. 初始化数据库
+
+```bash
+pnpm db:migrate   # 应用所有 migration（含手写 SQL 约束）
+pnpm db:seed      # 填充演示数据，约 70–90 秒，会重置所有现有数据
+```
+
+seed 脚本会创建演示账号（见上方账号表）、约 200 名学生、15 个班级，并在"今天"安排有课的数据以便演示。
+
+### 4. 启动开发服务
+
+两个终端窗口分别运行：
+
+```bash
+# 终端 1
+pnpm --filter api dev    # NestJS API，监听 :3000
+
+# 终端 2
+pnpm --filter web dev    # Vite dev server，监听 :5173
+```
+
+打开 [http://localhost:5173](http://localhost:5173)。Vite 会把 `/api/*` 代理到 `:3000`，与生产环境同域，httpOnly cookie 在两种环境下行为一致。
+
+也可以用根目录的 `pnpm dev` 同时启动两个进程（并行模式，日志混排）：
+
+```bash
+pnpm dev
+```
 
 ## 验证业务规则在服务端
 
