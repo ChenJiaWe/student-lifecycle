@@ -7,6 +7,11 @@ import { validateEnv } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { StudentsModule } from './students/students.module';
+import { CreditsModule } from './credits/credits.module';
+import { TasksModule } from './tasks/tasks.module';
+import { SchedulingModule } from './scheduling/scheduling.module';
+import { AttendanceModule } from './attendance/attendance.module';
+import { DigestModule } from './digest/digest.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { HealthController } from './health.controller';
@@ -23,6 +28,11 @@ import { HealthController } from './health.controller';
     PrismaModule,
     AuthModule,
     StudentsModule,
+    CreditsModule,
+    TasksModule,
+    SchedulingModule,
+    AttendanceModule,
+    DigestModule,
 
     // 生产环境下单服务托管 SPA 产物：同域 → 零 CORS、cookie 天然 first-party。
     //

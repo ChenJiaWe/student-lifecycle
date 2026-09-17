@@ -43,11 +43,21 @@ export class StudentsController {
     return students.map((s) => ({ ...s, isMine: s.ownerAdminId === user.id }));
   }
 
+  /**
+   * 学生详情 —— 一页看全，前端不用打五个接口再自己拼。
+   *
+   * 包含：基本信息 + 联系人（主联系人/付款人）+ 课时流水
+   * + 在读班级 + 最近出勤与反馈 + 待跟进任务。
+   *
+   * 课时区返回的是流水而不是一个数字：课时是钱，admin 要能回答家长
+   * "我这 20 节课怎么用掉的"。
+   */
   @Get(':id')
   async detail(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     await this.ownership.assertCanReadStudent(user, id);
+    const isAdmin = user.role === Role.ADMIN;
 
-    return this.prisma.student.findUniqueOrThrow({
+    const student = await this.prisma.student.findUniqueOrThrow({
       where: { id },
       select: {
         id: true,
@@ -55,10 +65,104 @@ export class StudentsController {
         grade: true,
         status: true,
         note: true,
+        source: true,
+        createdAt: true,
         ownerAdmin: { select: { id: true, name: true } },
         account: { select: { balance: true, lowBalanceThreshold: true } },
+        guardians: {
+          select: {
+            relation: true,
+            isPrimaryContact: true,
+            isPayer: true,
+            guardian: { select: { id: true, name: true, phone: true, email: true, wechat: true } },
+          },
+          orderBy: { isPrimaryContact: 'desc' },
+        },
+        enrollments: {
+          where: { status: 'ACTIVE' },
+          select: {
+            id: true,
+            startDate: true,
+            classGroup: {
+              select: {
+                id: true,
+                weekday: true,
+                startTimeLocal: true,
+                durationMin: true,
+                room: true,
+                course: { select: { name: true, subject: true } },
+                teacher: { select: { name: true } },
+              },
+            },
+          },
+        },
+        attendance: {
+          orderBy: { recordedAt: 'desc' },
+          take: 12,
+          select: {
+            id: true,
+            status: true,
+            teacherNote: true,
+            recordedAt: true,
+            correctedAt: true,
+            correctionNote: true,
+            session: {
+              select: {
+                id: true,
+                type: true,
+                startsAt: true,
+                classGroup: { select: { course: { select: { name: true } } } },
+              },
+            },
+            recordedBy: { select: { name: true } },
+          },
+        },
+        tasks: {
+          where: { status: 'OPEN' },
+          orderBy: { dueAt: 'asc' },
+          select: { id: true, type: true, reason: true, dueAt: true, createdBy: true },
+        },
       },
     });
+
+    // 课时流水只给 admin —— 老师不碰钱的账（与 CreditsService.ledger 一致）
+    const ledger = isAdmin
+      ? await this.prisma.creditLedger.findMany({
+          where: { studentId: id },
+          orderBy: { createdAt: 'desc' },
+          take: 30,
+          select: {
+            id: true,
+            delta: true,
+            reason: true,
+            note: true,
+            createdAt: true,
+            createdBy: { select: { name: true } },
+            purchase: { select: { amountCents: true } },
+            sessionId: true,
+          },
+        })
+      : [];
+
+    const balance = student.account?.balance ?? 0;
+    const threshold = student.account?.lowBalanceThreshold ?? 4;
+
+    return {
+      ...student,
+      isMine: student.ownerAdmin.id === user.id,
+      credits: isAdmin
+        ? { balance, lowBalanceThreshold: threshold, isLow: balance <= threshold, ledger }
+        // 老师只看到布尔标记，看不到具体余额（见 DESIGN.md 假设 6）
+        : { isLow: balance <= threshold },
+      // 出勤统计：简报降级时前端展示这个
+      attendanceStats: {
+        total: student.attendance.length,
+        present: student.attendance.filter((a) => a.status === 'PRESENT').length,
+        late: student.attendance.filter((a) => a.status === 'LATE').length,
+        absent: student.attendance.filter((a) => a.status === 'ABSENT').length,
+        excused: student.attendance.filter((a) => a.status === 'EXCUSED').length,
+      },
+    };
   }
 
   /**

@@ -43,12 +43,24 @@ export class PrismaExceptionFilter implements ExceptionFilter {
         case 'P2002': {
           const target = (err.meta?.target as string[] | string | undefined) ?? '';
           const name = Array.isArray(target) ? target.join(',') : String(target);
+          const model = String(err.meta?.modelName ?? '');
 
+          // partial unique index 的 P2002 只报列名（studentId），不报索引名，
+          // 所以要结合 modelName 才能判断是哪条业务规则被触发
           if (name.includes('one_trial_per_student')) {
             return new ConflictException('该学生已经试听过了');
           }
+          if (model === 'SessionParticipant' && name === 'studentId') {
+            return new ConflictException('该学生已经试听过了');
+          }
+          if (model === 'Attendance') {
+            return new ConflictException('已为该学生点过名，出勤不可修改');
+          }
           if (name.includes('idempotencyKey')) {
             return new ConflictException('该操作已执行过');
+          }
+          if (model === 'FollowUpTask') {
+            return new ConflictException('该学生已有同类型的待处理任务');
           }
           return new ConflictException(`唯一约束冲突: ${name}`);
         }
