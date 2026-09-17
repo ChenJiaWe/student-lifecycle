@@ -68,6 +68,16 @@ function AuthedLayout() {
               教务控制台
             </a>
           )}
+          {user.role === 'ADMIN' && (
+            <nav className="flex items-center gap-4 ml-4">
+              <Link to="/students" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+                学生
+              </Link>
+              <Link to="/trials" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+                试听
+              </Link>
+            </nav>
+          )}
           <span className="ml-auto text-sm text-muted-foreground">
             {user.name}
             <span className="ml-2 text-xs">{user.role === 'TEACHER' ? '老师' : '教务'}</span>

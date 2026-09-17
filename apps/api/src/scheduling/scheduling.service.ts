@@ -379,4 +379,149 @@ export class SchedulingService {
       return { sessionId: session.id, startsAt: session.startsAt, endsAt: session.endsAt };
     }, { timeout: 20000 });
   }
+
+  /**
+   * admin 工作台的试听列表。
+   *
+   * 把散落在 SessionParticipant 里的试听课次聚合成一个视图，让 admin 知道：
+   * - 谁的试听排了但还没来（TRIAL_SCHEDULED）
+   * - 谁来了但还没跟进（TRIAL_ATTENDED）
+   *
+   * 只返回自己名下的学生，与其他端点一致。
+   */
+  async listTrials(user: AuthUser) {
+    const today = melbourneStartOfToday();
+
+    const participants = await this.prisma.sessionParticipant.findMany({
+      where: {
+        source: ParticipantSource.TRIAL,
+        student: { ownerAdminId: user.id },
+      },
+      orderBy: { session: { startsAt: 'desc' } },
+      select: {
+        studentId: true,
+        student: {
+          select: {
+            id: true,
+            name: true,
+            grade: true,
+            status: true,
+            guardians: {
+              where: { isPrimaryContact: true },
+              select: {
+                guardian: { select: { name: true, phone: true, wechat: true } },
+                relation: true,
+              },
+              take: 1,
+            },
+          },
+        },
+        session: {
+          select: {
+            id: true,
+            startsAt: true,
+            endsAt: true,
+            room: true,
+            teacher: { select: { name: true } },
+            attendance: {
+              where: { studentId: undefined }, // 所有出勤，在 JS 侧过滤
+              select: { studentId: true, status: true, teacherNote: true },
+            },
+          },
+        },
+      },
+    });
+
+    return participants.map((p) => {
+      const att = p.session.attendance.find((a) => a.studentId === p.studentId);
+      const contact = p.student.guardians[0];
+      const isPast = new Date(p.session.startsAt) < today;
+
+      return {
+        studentId: p.student.id,
+        studentName: p.student.name,
+        grade: p.student.grade,
+        studentStatus: p.student.status,
+        sessionId: p.session.id,
+        startsAt: p.session.startsAt,
+        endsAt: p.session.endsAt,
+        room: p.session.room,
+        teacherName: p.session.teacher.name,
+        attended: att != null,
+        attendanceStatus: att?.status ?? null,
+        teacherNote: att?.teacherNote ?? null,
+        isPast,
+        primaryContact: contact
+          ? { name: contact.guardian.name, phone: contact.guardian.phone, wechat: contact.guardian.wechat, relation: contact.relation }
+          : null,
+      };
+    });
+  }
+
+  /**
+   * 课次滚动补齐：为所有活跃 Enrollment 生成未来 weeksAhead 周内尚缺的课次。
+   *
+   * 设计意图：enrollStudent 只在入学时生成 GENERATE_WEEKS_AHEAD(=2) 周的课次，
+   * 之后靠本方法定期补。每次调用是幂等的——已有课次不重复建。
+   *
+   * 生产用法：由 NestJS Cron 每周一凌晨 2 时（墨尔本）调用（见 scheduling.module.ts）。
+   * 也可以通过 POST /sessions/extend-upcoming 手动触发（供 admin 在部署后立即补全）。
+   */
+  async extendUpcomingSessions(weeksAhead = 4) {
+    const today = melbourneStartOfToday();
+    const cutoff = new Date(today.getTime() + weeksAhead * 7 * 86400000);
+
+    const enrollments = await this.prisma.enrollment.findMany({
+      where: { status: EnrollmentStatus.ACTIVE },
+      select: {
+        classGroupId: true,
+        classGroup: {
+          select: {
+            id: true,
+            weekday: true,
+            startTimeLocal: true,
+            durationMin: true,
+            teacherId: true,
+            startDate: true,
+          },
+        },
+      },
+    });
+
+    // 唯一班级列表（多个学生同班只处理一次）
+    const groups = [
+      ...new Map(enrollments.map((e) => [e.classGroupId, e.classGroup])).values(),
+    ];
+
+    let created = 0;
+    for (const g of groups) {
+      const anchor = g.startDate > today ? g.startDate : today;
+      const dates = upcomingWeekdayDates(anchor, g.weekday, weeksAhead);
+
+      for (const date of dates) {
+        const startsAt = melbourneWallClockToUtc(date, g.startTimeLocal);
+        if (startsAt >= cutoff) continue;
+
+        const exists = await this.prisma.classSession.findFirst({
+          where: { classGroupId: g.id, startsAt },
+          select: { id: true },
+        });
+        if (exists) continue;
+
+        const endsAt = sessionEndsAt(startsAt, g.durationMin);
+        await this.prisma.classSession.create({
+          data: {
+            classGroupId: g.id,
+            teacherId: g.teacherId,
+            type: SessionType.REGULAR,
+            startsAt,
+            endsAt,
+          },
+        });
+        created++;
+      }
+    }
+
+    return { groupsChecked: groups.length, sessionsCreated: created, cutoff };
+  }
 }
