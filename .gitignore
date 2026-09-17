@@ -37,3 +37,6 @@ pnpm-debug.log*
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Nest 构建产物
+apps/api/dist/
