@@ -13,9 +13,12 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DATABASE_URL_UNPOOLED")
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  directUrl         = env("DATABASE_URL_UNPOOLED")
+  // Neon 不允许 Prisma 自动创建 shadow database，必须手动建一个并在此指定，
+  // 否则 `prisma migrate dev` 报 P1001（而 db execute 却能连上，容易误判为网络问题）
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 // ─────────────────────────── 账号与角色 ───────────────────────────
