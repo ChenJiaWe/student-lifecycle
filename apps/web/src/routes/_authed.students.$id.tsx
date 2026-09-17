@@ -29,6 +29,7 @@ import { ErrorState, LoadingRows } from '@/components/DataState'
 import { AttendanceStatusBadge, StudentStatusBadge } from '@/components/StatusBadges'
 import { CreditLedgerTimeline } from '@/components/CreditLedger'
 import { EnrollDrawer } from '@/components/EnrollDrawer'
+import { TrialDrawer } from '@/components/TrialDrawer'
 import { PurchaseCreditsDialog } from '@/components/PurchaseCreditsDialog'
 import { StudentDigest } from '@/components/StudentDigest'
 import { TaskList } from '@/components/TaskList'
@@ -53,6 +54,7 @@ function StudentDetailPage() {
   const { id } = Route.useParams()
   const detail = useQuery(studentDetailQueryOptions(id))
   const [enrollOpen, setEnrollOpen] = useState(false)
+  const [trialOpen, setTrialOpen] = useState(false)
 
   if (detail.isPending) {
     return (
@@ -92,7 +94,7 @@ function StudentDetailPage() {
     <div className="space-y-5">
       <BackLink />
 
-      <StudentHeader student={student} onEnroll={() => setEnrollOpen(true)} />
+      <StudentHeader student={student} onEnroll={() => setEnrollOpen(true)} onTrial={() => setTrialOpen(true)} />
 
       {/* 余额告警放最顶上：这是唯一一条"现在就该做点什么"的信息 */}
       {student.credits.isLow ? (
@@ -135,6 +137,12 @@ function StudentDetailPage() {
         open={enrollOpen}
         onOpenChange={setEnrollOpen}
       />
+      <TrialDrawer
+        studentId={student.id}
+        studentName={student.name}
+        open={trialOpen}
+        onOpenChange={setTrialOpen}
+      />
     </div>
   )
 }
@@ -154,9 +162,11 @@ function BackLink() {
 function StudentHeader({
   student,
   onEnroll,
+  onTrial,
 }: {
   student: StudentDetail
   onEnroll: () => void
+  onTrial: () => void
 }) {
   return (
     <Card>
@@ -185,7 +195,11 @@ function StudentHeader({
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={onEnroll}>
               <CalendarPlus className="mr-1 h-4 w-4" />
-              排课
+              排进固定班
+            </Button>
+            <Button variant="outline" onClick={onTrial}>
+              <CalendarPlus className="mr-1 h-4 w-4" />
+              安排试听
             </Button>
             <PurchaseCreditsDialog
               studentId={student.id}

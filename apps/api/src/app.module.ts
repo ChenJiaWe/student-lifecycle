@@ -12,6 +12,7 @@ import { TasksModule } from './tasks/tasks.module';
 import { SchedulingModule } from './scheduling/scheduling.module';
 import { AttendanceModule } from './attendance/attendance.module';
 import { DigestModule } from './digest/digest.module';
+import { TeachersModule } from './teachers/teachers.module';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { HealthController } from './health.controller';
@@ -33,6 +34,7 @@ import { HealthController } from './health.controller';
     SchedulingModule,
     AttendanceModule,
     DigestModule,
+    TeachersModule,
 
     // 生产环境下单服务托管 SPA 产物：同域 → 零 CORS、cookie 天然 first-party。
     //
