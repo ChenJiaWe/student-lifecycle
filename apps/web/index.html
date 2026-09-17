@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>教务控制台</title>
+    <script>
+      // 在首次绘制前决定明暗，避免闪白。跟随系统，无需用户操作；
+      // .dark 类是 shadcn/ui 主题变量的开关，保留它以便后续加手动切换。
+      ;(function () {
+        var mq = window.matchMedia('(prefers-color-scheme: dark)')
+        var apply = function () {
+          document.documentElement.classList.toggle('dark', mq.matches)
+        }
+        apply()
+        mq.addEventListener('change', apply)
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
