@@ -1,0 +1,431 @@
+// student-lifecycle — 学生生命周期管理
+//
+// 建模要点（详见 DESIGN.md）：
+//  1. 家长 ≠ 学生：咨询的是家长、上课的是孩子、付钱可能是第三人
+//  2. ClassGroup（每周固定的周期规则）≠ ClassSession（某一天那一节具体的课）
+//     出勤、调课、代课、请假全发生在 session 上。没有 session 实体，"老师请假一周"无解
+//  3. 课时是钱：CreditLedger 是流水（真相），CreditAccount.balance 是同事务内维护的
+//     物化值——物化的目的是能挂 CHECK (balance >= 0) 让数据库兜住负余额
+//  4. 试听与正式课在时空调度层是同一个模型，只在计费和状态机层分叉 → 用 type 区分
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
+}
+
+// ─────────────────────────── 账号与角色 ───────────────────────────
+
+enum Role {
+  ADMIN // 课程顾问 / 教务：管学生、排课、跟进续费
+  TEACHER // 老师：只看自己的课、点名、写反馈。不碰钱
+}
+
+model User {
+  id           String  @id @default(cuid())
+  email        String  @unique
+  passwordHash String
+  name         String
+  role         Role
+  active       Boolean @default(true)
+
+  // TEACHER 角色关联到 Teacher 档案；ADMIN 为 null
+  teacherId String?  @unique
+  teacher   Teacher? @relation(fields: [teacherId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  // 反向关系
+  ownedStudents       Student[]        @relation("StudentOwner")
+  assignedTasks       FollowUpTask[]   @relation("TaskOwner")
+  recordedAttendance  Attendance[]     @relation("AttendanceRecorder")
+  correctedAttendance Attendance[]     @relation("AttendanceCorrector")
+  createdLedger       CreditLedger[]
+  createdPurchases    CreditPurchase[]
+
+  @@index([role, active])
+}
+
+model Teacher {
+  id       String   @id @default(cuid())
+  name     String
+  subjects String[]
+  active   Boolean  @default(true)
+
+  user        User?
+  classGroups ClassGroup[]
+  sessions    ClassSession[] @relation("SessionTeacher")
+  substituted ClassSession[] @relation("SessionSubstitute")
+}
+
+// ─────────────────────────── 学生与家长 ───────────────────────────
+
+// 生命周期：
+//   INQUIRY → TRIAL_SCHEDULED → TRIAL_ATTENDED → ENROLLED → AT_RISK → CHURNED
+//   咨询/试听阶段可 → LOST；AT_RISK 续费后回到 ENROLLED
+//
+// 判断：不建独立 Lead 表。同一个人在咨询阶段和报名后不该换主键，否则要做数据搬迁。
+// 代价是咨询阶段很多字段为空——可接受。
+enum StudentStatus {
+  INQUIRY
+  TRIAL_SCHEDULED
+  TRIAL_ATTENDED
+  ENROLLED
+  AT_RISK
+  CHURNED
+  LOST
+}
+
+model Student {
+  id     String        @id @default(cuid())
+  name   String
+  grade  String?
+  status StudentStatus @default(INQUIRY)
+
+  // 归属：10 个 admin 各管约 100 名学生。admin 可读全部，但只能改自己名下的
+  ownerAdminId String
+  ownerAdmin   User   @relation("StudentOwner", fields: [ownerAdminId], references: [id])
+
+  source    String? // 来源渠道：转介绍 / 线上 / 路过……
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  guardians    StudentGuardian[]
+  enrollments  Enrollment[]
+  participants SessionParticipant[]
+  attendance   Attendance[]
+  account      CreditAccount?
+  ledger       CreditLedger[]
+  purchases    CreditPurchase[]
+  tasks        FollowUpTask[]
+  digests      LessonDigest[]
+
+  @@index([ownerAdminId, status])
+  @@index([status])
+}
+
+model Guardian {
+  id     String  @id @default(cuid())
+  name   String
+  phone  String
+  email  String?
+  wechat String?
+
+  students StudentGuardian[]
+
+  @@index([phone])
+}
+
+// 家长与学生是多对多：一个家长可能有两个孩子，一个孩子可能有父母双方
+// isPrimaryContact = 平时联系谁；isPayer = 谁付钱（可能是不同的人）
+model StudentGuardian {
+  studentId        String
+  guardianId       String
+  relation         String // 母亲 / 父亲 / 祖父母 / 其他
+  isPrimaryContact Boolean @default(false)
+  isPayer          Boolean @default(false)
+
+  student  Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  guardian Guardian @relation(fields: [guardianId], references: [id], onDelete: Cascade)
+
+  @@id([studentId, guardianId])
+}
+
+// ─────────────────────────── 课程与班级 ───────────────────────────
+
+model Course {
+  id      String  @id @default(cuid())
+  name    String // IELTS 写作初级
+  subject String // 写作 / 口语 / 阅读
+  level   String?
+
+  classGroups ClassGroup[]
+}
+
+// 每周固定的班：周期规则，不是具体某一节课
+//
+// 时区处理：存 weekday + startTimeLocal（墙钟时间）+ timezone，不存 UTC 死值。
+// 生成 session 时把 (具体日期, 本地墙钟时间, Australia/Melbourne) 解析成 UTC 瞬时。
+// 原因：墨尔本有夏令时，每周固定 16:00 的班在切换后 UTC 时刻会差一小时——
+// 把第一节课的偏移复制到全年就会全错。
+model ClassGroup {
+  id        String @id @default(cuid())
+  courseId  String
+  teacherId String
+
+  weekday        Int // 0=周日 … 6=周六
+  startTimeLocal String // "16:00" 墨尔本本地墙钟时间
+  durationMin    Int
+  timezone       String @default("Australia/Melbourne")
+
+  capacity  Int
+  room      String?
+  startDate DateTime  @db.Date
+  endDate   DateTime? @db.Date
+  active    Boolean   @default(true)
+
+  course  Course  @relation(fields: [courseId], references: [id])
+  teacher Teacher @relation(fields: [teacherId], references: [id])
+
+  enrollments Enrollment[]
+  sessions    ClassSession[]
+
+  @@index([teacherId, active])
+  @@index([weekday, active])
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  PAUSED
+  LEFT
+}
+
+model Enrollment {
+  id           String           @id @default(cuid())
+  studentId    String
+  classGroupId String
+  status       EnrollmentStatus @default(ACTIVE)
+  startDate    DateTime         @db.Date
+  endDate      DateTime?        @db.Date
+
+  student    Student    @relation(fields: [studentId], references: [id])
+  classGroup ClassGroup @relation(fields: [classGroupId], references: [id])
+
+  @@unique([studentId, classGroupId])
+  @@index([classGroupId, status])
+}
+
+// ─────────────────────────── 课次与出勤 ───────────────────────────
+
+enum SessionType {
+  REGULAR // 正式课，扣课时
+  TRIAL // 试听课，不扣课时、每学生仅一次
+  MAKEUP // 补课
+}
+
+enum SessionStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+// 某一天那一节具体的课。出勤、调课、代课、请假都发生在这一层。
+// classGroupId 为 null 表示 1:1 试听（不属于任何固定班）
+model ClassSession {
+  id           String        @id @default(cuid())
+  classGroupId String?
+  teacherId    String
+  type         SessionType   @default(REGULAR)
+  status       SessionStatus @default(SCHEDULED)
+
+  startsAt DateTime @db.Timestamptz(3)
+  endsAt   DateTime @db.Timestamptz(3)
+  room     String?
+
+  cancelReason           String?
+  // 代课：记下原本该谁上，这样"老师临时请假一周"只改这一节，不动 ClassGroup
+  substituteForTeacherId String?
+
+  classGroup           ClassGroup? @relation(fields: [classGroupId], references: [id])
+  teacher              Teacher     @relation("SessionTeacher", fields: [teacherId], references: [id])
+  substituteForTeacher Teacher?    @relation("SessionSubstitute", fields: [substituteForTeacherId], references: [id])
+
+  participants SessionParticipant[]
+  attendance   Attendance[]
+  sourcedTasks FollowUpTask[]       @relation("TaskSourceSession")
+
+  // 老师"今日课程"的主查询路径
+  @@index([teacherId, startsAt])
+  @@index([classGroupId, startsAt])
+  @@index([startsAt, status])
+}
+
+enum ParticipantSource {
+  ENROLLMENT // 因在读固定班而参与
+  TRIAL // 试听生
+  MAKEUP // 来补课
+}
+
+model SessionParticipant {
+  id        String            @id @default(cuid())
+  sessionId String
+  studentId String
+  source    ParticipantSource
+
+  session ClassSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student Student      @relation(fields: [studentId], references: [id])
+
+  @@unique([sessionId, studentId])
+  @@index([studentId])
+}
+
+enum AttendanceStatus {
+  PRESENT // 到课 → 扣 1 课时
+  LATE // 迟到 → 扣 1 课时
+  ABSENT // 无故缺勤 → 照扣（老师时间已占用，课时是钱）
+  EXCUSED // 提前请假 → 不扣
+}
+
+// 出勤一经提交即锁定，老师不能修改（规则 10）。
+// 订正只能由 admin 走冲正：更新 status + 写反向 ledger，必填 correctionNote（规则 11）。
+// 原因：ledger 是账本，账本只能冲正不能删改。让老师改出勤等于让老师改账。
+model Attendance {
+  id        String           @id @default(cuid())
+  sessionId String
+  studentId String
+  status    AttendanceStatus
+
+  teacherNote String? // 老师自由文本反馈，原文保存（LLM 简报的输入）
+
+  recordedById String
+  recordedAt   DateTime @default(now())
+
+  correctedById  String?
+  correctedAt    DateTime?
+  correctionNote String?
+
+  session     ClassSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student     Student      @relation(fields: [studentId], references: [id])
+  recordedBy  User         @relation("AttendanceRecorder", fields: [recordedById], references: [id])
+  correctedBy User?        @relation("AttendanceCorrector", fields: [correctedById], references: [id])
+
+  ledgerEntries CreditLedger[]
+
+  @@unique([sessionId, studentId]) // 点名幂等的第一道保障（规则 4）
+  @@index([studentId, recordedAt])
+}
+
+// ─────────────────────────── 课时（钱） ───────────────────────────
+
+// 全局池：课时跨科目通用、不过期（明确假设，见 DESIGN.md 假设清单）
+// balance 是 CreditLedger 的物化值，在同一事务内维护 —— 物化的目的是能挂
+// CHECK (balance >= 0)，让数据库成为负余额的最后一道墙
+model CreditAccount {
+  id                  String @id @default(cuid())
+  studentId           String @unique
+  balance             Int    @default(0)
+  lowBalanceThreshold Int    @default(4)
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+enum LedgerReason {
+  PURCHASE // 购买
+  CONSUME // 上课扣减
+  REFUND // 退款
+  EXPIRE // 过期（第一版不实现，枚举预留）
+  ADJUST // 人工调整 / 出勤订正冲正
+}
+
+// 流水不可变：只追加，不更新、不删除。订正靠写反向记录
+model CreditLedger {
+  id        String       @id @default(cuid())
+  studentId String
+  delta     Int // 正数入账，负数出账
+  reason    LedgerReason
+
+  sessionId    String? // CONSUME 时指向哪一节课
+  attendanceId String?
+  purchaseId   String?
+  note         String?
+
+  // 幂等键：点名扣课时用 "consume:{sessionId}:{studentId}"
+  // 重复请求撞唯一约束 → 返回既有结果，不重复扣（规则 4）
+  idempotencyKey String? @unique
+
+  createdById String
+  createdAt   DateTime @default(now())
+
+  student    Student         @relation(fields: [studentId], references: [id])
+  attendance Attendance?     @relation(fields: [attendanceId], references: [id])
+  purchase   CreditPurchase? @relation(fields: [purchaseId], references: [id])
+  createdBy  User            @relation(fields: [createdById], references: [id])
+
+  @@index([studentId, createdAt])
+}
+
+model CreditPurchase {
+  id          String @id @default(cuid())
+  studentId   String
+  credits     Int
+  amountCents Int // 金额用整数分，不用浮点
+
+  purchasedAt DateTime @default(now())
+  createdById String
+
+  student   Student        @relation(fields: [studentId], references: [id])
+  createdBy User           @relation(fields: [createdById], references: [id])
+  ledger    CreditLedger[]
+
+  @@index([studentId, purchasedAt])
+}
+
+// ─────────────────────────── 跟进任务 ───────────────────────────
+
+enum TaskType {
+  TRIAL_FOLLOWUP // 试听完没人跟进  ← 背景痛点
+  LOW_BALANCE // 课时快用完没提醒续费  ← 背景痛点
+  ABSENCE_RISK // 连续缺勤
+  FEEDBACK_RISK // 反馈里出现风险信号
+}
+
+enum TaskStatus {
+  OPEN
+  DONE
+  DISMISSED
+}
+
+enum TaskCreator {
+  SYSTEM
+  USER
+}
+
+// admin 工作台的数据源：把"今天我要处理谁"直接推到眼前，
+// 而不是给 admin 一张 100 人的表让他自己翻
+model FollowUpTask {
+  id           String      @id @default(cuid())
+  studentId    String
+  ownerAdminId String
+  type         TaskType
+  status       TaskStatus  @default(OPEN)
+  createdBy    TaskCreator @default(SYSTEM)
+
+  dueAt  DateTime
+  reason String
+
+  sourceSessionId String?
+  resolvedAt      DateTime?
+  resolutionNote  String?
+  createdAt       DateTime  @default(now())
+
+  student       Student       @relation(fields: [studentId], references: [id])
+  ownerAdmin    User          @relation("TaskOwner", fields: [ownerAdminId], references: [id])
+  sourceSession ClassSession? @relation("TaskSourceSession", fields: [sourceSessionId], references: [id])
+
+  @@index([ownerAdminId, status, dueAt])
+  @@index([studentId, status])
+}
+
+// ─────────────────────────── LLM 简报缓存 ───────────────────────────
+
+// 续费沟通简报：只读聚合，按 inputHash 缓存避免重复调用。
+// 记录 model 与生成时间以便审计——它影响了对家长的沟通，属于要留痕的东西
+model LessonDigest {
+  id        String @id @default(cuid())
+  studentId String
+  inputHash String @unique
+  payload   Json
+  model     String
+
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, createdAt])
+}
