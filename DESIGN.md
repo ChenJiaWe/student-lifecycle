@@ -286,7 +286,7 @@ flowchart LR
 | **NestJS 单服务托管 SPA 产物** | 同域 → 零 CORS、httpOnly cookie 天然 first-party、评审点开一个链接就能用。dev/prod 都同域，不会"本地能跑线上挂" |
 | **ClassGroup / ClassSession 分离** | 出勤、调课、代课、请假都发生在具体课次上。没有 session 实体，"老师临时请假一周"无解 |
 | **CreditLedger 流水 + CreditAccount 物化余额** | 课时是钱必须可审计；物化余额是为了能挂 `CHECK (balance >= 0)` 让数据库兜住负余额，不是为了查询性能 |
-| **Neon 而非 Supabase** | Supabase 免费项目 7 天无活动会 pause，面试前重新部署是不必要的风险。Neon 只休眠 compute（冷启动 300–800ms），有 branch 功能方便重置演示数据 |
+| **Neon 而非 Supabase** | Supabase 免费项目 7 天无活动会 pause 整个项目（数据库不可访问，需手动恢复）。Neon 只休眠 compute，冷启动 300–800ms，数据库始终可达；branch 功能便于重置演示数据 |
 
 ---
 
