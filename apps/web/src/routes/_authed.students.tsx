@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, Outlet, useChildMatches } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { CalendarPlus, Search } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -46,6 +46,9 @@ type ScopeFilter = 'mine' | 'all'
  * 量级的问题，现在做就是过度设计。
  */
 function StudentsPage() {
+  const childMatches = useChildMatches()
+  const hasChild = childMatches.length > 0
+
   const students = useQuery(studentsQueryOptions)
 
   const [scope, setScope] = useState<ScopeFilter>('mine')
@@ -53,6 +56,8 @@ function StudentsPage() {
   const [lowOnly, setLowOnly] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [enrollTarget, setEnrollTarget] = useState<StudentListRow | null>(null)
+
+  if (hasChild) return <Outlet />
 
   const rows = students.data ?? []
 
