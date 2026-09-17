@@ -23,7 +23,7 @@ const envSchema = z.object({
   QIANWEN_API_KEY: z.string().optional(),
   QIANWEN_BASE_URL: z.string().url().optional(),
   QIANWEN_MODEL_NAME: z.string().default('qwen-plus'),
-  LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+  LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(20000),
 });
 
 export type Env = z.infer<typeof envSchema>;
