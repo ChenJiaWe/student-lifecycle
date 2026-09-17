@@ -23,25 +23,15 @@ export class DigestController {
   /**
    * 生成简报。
    *
-   * TODO(阶段6): 接入千问的 structured output 调用。
-   * 当前返回 available:false，前端已能正确展示降级 UI ——
-   * 这是刻意的：降级路径先跑通，再接 LLM。
+   * 取数、缓存、调模型、校验、落库全在 service 里，控制器只转发 ——
+   * 失败不抛异常而是返回 available:false，前端据此展示降级 UI。
+   * 未配 key、超时、校验不过走的都是同一条返回路径，前端只需要处理一种形状。
    */
   @Post()
-  async generate(
+  generate(
     @CurrentUser() user: AuthUser,
     @Param('studentId') studentId: string,
   ): Promise<DigestResult> {
-    const input = await this.digest.collectInput(user, studentId);
-    const hash = this.digest.inputHash(input);
-
-    const cached = await this.digest.findCached(studentId, hash);
-    if (cached) return cached;
-
-    if (!this.digest.llmConfigured) {
-      return { available: false, reason: '未配置 LLM key，简报功能暂不可用' };
-    }
-
-    return { available: false, reason: '简报生成功能开发中' };
+    return this.digest.generate(user, studentId);
   }
 }
