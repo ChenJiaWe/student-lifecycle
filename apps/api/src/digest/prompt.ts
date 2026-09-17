@@ -16,7 +16,7 @@ import { AttendanceStatus } from '@prisma/client';
  * 实测踩过：收紧"不许输出数字"之后，被污染样本仍返回"曾出现一次迟到"，
  * 就是命中了上一版 prompt 留下的缓存行。
  */
-export const PROMPT_VERSION = 2;
+export const PROMPT_VERSION = 3;
 
 /** DB 枚举 → 给模型看的中文标签。模型不需要知道我们的枚举名 */
 const STATUS_LABEL: Record<AttendanceStatus, string> = {
