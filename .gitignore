@@ -1,0 +1,36 @@
+# deps
+node_modules/
+.pnpm-store/
+
+# env — 真实凭据只留在本地，永不进仓库（public repo）
+.env
+.env.*
+!.env.example
+
+# build
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# TanStack Router 自动生成
+apps/web/src/routeTree.gen.ts
+
+# 内部工作文档，不作为交付物
+docs/plan.md
+
+# AI skills：只提交 skills-lock.json（记录来源仓库与内容哈希，可复现）
+# 620K 的第三方文档正文不入库，避免污染 git 历史与 diff
+.agents/
+.claude/skills/
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
